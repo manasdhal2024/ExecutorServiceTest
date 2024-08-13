@@ -1,0 +1,208 @@
+package com.bang.interview;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.UUID;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.locks.ReadWriteLock;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
+
+public class Main {
+
+	public static void main(String args[]) {
+
+		ReadWriteCounter counter = new ReadWriteCounter();
+
+
+		UUID uuid = UUID.randomUUID();
+		UUID groupOneUUID = UUID.randomUUID();
+		UUID groupTweUUID = UUID.randomUUID();
+
+		TaskGroup taskGroupTwo = new TaskGroup(groupTweUUID);
+		TaskGroup taskGroupOne = new TaskGroup(groupOneUUID);
+
+
+		Task<Integer> writeTask = new Task<Integer>(uuid, taskGroupOne, TaskType.WRITE, () -> {
+			counter.writeTaskGroup = taskGroupOne;
+			int result = counter.incrementAndGetCount();
+			System.out.println(Thread.currentThread().getName() +
+					" Write Task : " + result);
+			return result;
+		});
+
+		Task<Integer> readTask = new Task<Integer>(uuid, taskGroupTwo, TaskType.READ, () -> {
+			counter.readTaskGroup = taskGroupTwo;
+			int result = counter.getCount();
+			System.out.println(Thread.currentThread().getName() +
+					" Read Task : " + result);
+			return result;
+		});
+
+		Task<Integer> readTaskWithWriteTaskGroup = new Task<Integer>(uuid, taskGroupTwo, TaskType.READ, () -> {
+			counter.writeTaskGroup = taskGroupOne;
+			counter.readTaskGroup = taskGroupOne;
+			int result = counter.getCount();
+			System.out.println(Thread.currentThread().getName() +
+					" Read Task : " + result);
+			return result;
+		});
+
+		ExecutorService executorService = Executors.newFixedThreadPool(3);
+
+		TaskExecutor readExecutor = new TaskExecutor() {
+			@Override
+			public <T> Future<String> submitTask(Task<T> task) {
+				Future<String> future = null;
+				try {
+					future = executorService.submit(task.taskAction());
+				}
+				catch (Exception e) {
+					e.printStackTrace();
+				}
+				return future;
+			}
+		};
+
+		TaskExecutor writeExecutor = new TaskExecutor() {
+			@Override
+			public <T> Future<String> submitTask(Task<T> task) {
+				Future<String> future = null;
+				try {
+					future = executorService.submit(task.taskAction());
+				}
+				catch (Exception e) {
+					e.printStackTrace();
+				}
+				return future;
+			}
+		};
+
+		List<Future<String>> list = new ArrayList<>();
+
+		try {
+			Future<String> one = writeExecutor.submitTask(writeTask);
+			//one.get();
+			Future<String> three =readExecutor.submitTask(readTask);
+			//three.get();
+			Future<String> two =writeExecutor.submitTask(writeTask);
+			//two.get();
+
+			Future<String> four =readExecutor.submitTask(readTask);
+			//four.get();
+			Future<String> five =readExecutor.submitTask(readTaskWithWriteTaskGroup);
+			//five.get();
+			Future<String> six =writeExecutor.submitTask(writeTask);
+			//six.get();
+			Future<String> seven =readExecutor.submitTask(readTask);
+			//seven.get();
+		}catch (Exception e) {
+			e.printStackTrace();
+		}
+
+		executorService.shutdown();
+
+	}
+
+	/**
+	 * Enumeration of task types.
+	 */
+	public enum TaskType {
+		READ,
+		WRITE,
+	}
+
+	public interface TaskExecutor {
+		/**
+		 * Submit new task to be queued and executed.
+		 *
+		 * @param task Task to be executed by the executor. Must not be null.
+		 * @return Future for the task asynchronous computation result.
+		 */
+		<T> Future<String> submitTask(Task<T> task);
+	}
+
+
+	/**
+	 * Representation of computation to be performed by the {@link TaskExecutor}.
+	 *
+	 * @param taskUUID Unique task identifier.
+	 * @param taskGroup Task group.
+	 * @param taskType Task type.
+	 * @param taskAction Callable representing task computation and returning the result.
+	 * @param <T> Task computation result value type.
+	 */
+	public record Task<T>(UUID taskUUID, TaskGroup taskGroup, TaskType taskType, Callable taskAction) {
+    	public Task {
+			if (taskUUID == null || taskGroup == null || taskType == null || taskAction == null) {
+				throw new IllegalArgumentException("All parameters must not be null");
+			}
+		}
+	}
+
+
+	/**
+	 * Task group.
+	 *
+	 * @param groupUUID Unique group identifier.
+	 */
+	public record TaskGroup(
+			UUID groupUUID
+	) {
+		public TaskGroup {
+			if (groupUUID == null) {
+				throw new IllegalArgumentException("All parameters must not be null");
+			}
+		}
+	}
+
+}
+
+class ReadWriteCounter {
+	ReadWriteLock lock = new ReentrantReadWriteLock(true);
+	Main.TaskGroup readTaskGroup = null;
+	Main.TaskGroup writeTaskGroup = null;
+	private int count = 0;
+
+	public int incrementAndGetCount() {
+		lock.writeLock().lock();
+
+		try {
+			count = count + 1;
+			return count;
+		} catch(Exception e) {
+
+		} finally{
+			lock.writeLock().unlock();
+		}
+		return count;
+	}
+
+	public int getCount() {
+		if (null != readTaskGroup && readTaskGroup.equals(writeTaskGroup)) {
+			//System.out.println("This is same as write task group");
+			lock.writeLock().lock();
+
+			try {
+				return count;
+			} catch(Exception e) {
+
+			}finally {
+				lock.writeLock().unlock();
+			}
+		} else {
+			lock.readLock().lock();
+			try {
+				return count;
+			} catch(Exception e) {
+
+			}finally {
+				lock.readLock().unlock();
+			}
+		}
+		return count;
+	}
+}
+
